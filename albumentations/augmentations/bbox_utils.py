@@ -35,10 +35,27 @@ class BboxProcessor(DataProcessor):
             if not all(l in data.keys() for l in self.params.label_fields):
                 raise ValueError("Your 'label_fields' are not valid - them must have same names as params in dict")
 
+    def postprocess(self, data):
+        rows, cols = data["image"].shape[:2]
+        data = self.filter(data, rows, cols)
+        data["bboxes"] = self.check_and_convert(data["bboxes"], rows, cols, direction="from")
+        data = self.remove_label_fields_from_data(data)
+
+        return data
+
     def filter(self, data, rows, cols):
-        return filter_bboxes(
-            data, rows, cols, min_area=self.params.min_area, min_visibility=self.params.min_visibility
-        )
+        if "masks" in data:
+            data["bboxes"], data["masks"] = filter_bboxes(
+                data["bboxes"], rows, cols,
+                min_area=self.params.min_area, min_visibility=self.params.min_visibility,
+                masks=data["masks"]
+            )
+        else:
+            data["bboxes"] = filter_bboxes(
+                data["bboxes"], rows, cols,
+                min_area=self.params.min_area, min_visibility=self.params.min_visibility
+            )
+        return data
 
     def check(self, data, rows, cols):
         return check_bboxes(data)
@@ -260,7 +277,7 @@ def check_bboxes(bboxes):
         check_bbox(bbox)
 
 
-def filter_bboxes(bboxes, rows, cols, min_area=0.0, min_visibility=0.0):
+def filter_bboxes(bboxes, rows, cols, min_area=0.0, min_visibility=0.0, masks=None):
     """Remove bounding boxes that either lie outside of the visible area by more then min_visibility
     or whose area in pixels is under the threshold set by `min_area`. Also it crops boxes to final image size.
 
@@ -271,9 +288,11 @@ def filter_bboxes(bboxes, rows, cols, min_area=0.0, min_visibility=0.0):
         min_area (float): minimum area of a bounding box. All bounding boxes whose visible area in pixels
             is less than this value will be removed. Default: 0.0.
         min_visibility (float): minimum fraction of area for a bounding box to remain this box in list. Default: 0.0.
+        masks (list): list of masks with shapes corresponded to bboxes (feature for instance segmentation)
     """
     resulting_boxes = []
-    for bbox in bboxes:
+    resulting_masks = []
+    for i, bbox in enumerate(bboxes):
         transformed_box_area = calculate_bbox_area(bbox, rows, cols)
         bbox[:4] = np.clip(bbox[:4], 0, 1.0)
         clipped_box_area = calculate_bbox_area(bbox, rows, cols)
@@ -284,7 +303,12 @@ def filter_bboxes(bboxes, rows, cols, min_area=0.0, min_visibility=0.0):
         if calculate_bbox_area(bbox, rows, cols) <= min_area:
             continue
         resulting_boxes.append(bbox)
-    return resulting_boxes
+        if masks is not None:
+            resulting_masks.append(masks[i])
+    if masks is not None:
+        return resulting_boxes, resulting_masks
+    else:
+        return resulting_boxes
 
 
 def union_of_bboxes(height, width, bboxes, erosion_rate=0.0, to_int=False):

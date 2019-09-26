@@ -682,6 +682,7 @@ class RandomCrop(DualTransform):
         super(RandomCrop, self).__init__(always_apply, p)
         self.height = height
         self.width = width
+        self.hash_bboxes = []
 
     def apply(self, img, h_start=0, w_start=0, **params):
         return F.random_crop(img, self.height, self.width, h_start, w_start)
@@ -690,10 +691,34 @@ class RandomCrop(DualTransform):
         return {"h_start": random.random(), "w_start": random.random()}
 
     def apply_to_bbox(self, bbox, **params):
-        return F.bbox_random_crop(bbox, self.height, self.width, **params)
+        res = F.bbox_random_crop(bbox, self.height, self.width, **params)
+        self.hash_bboxes.append(res)
+        return res
 
     def apply_to_keypoint(self, keypoint, **params):
         return F.keypoint_random_crop(keypoint, self.height, self.width, **params)
+
+    def apply_to_masks(self, masks, **params):
+        """
+
+        :param masks: List of numpy.arrays of different shapes. Shapes of masks are equal to corresponded bboxes.
+        :param params: params
+        :return:
+        """
+        res = []
+        if len(self.hash_bboxes) == len(masks):
+            for i, bbox in enumerate(self.hash_bboxes):
+                bbox_crop = denormalize_bbox(bbox[:4].copy(), self.height, self.width)
+                bbox_cliped = denormalize_bbox(np.clip(bbox[:4].copy(), 0, 1.), self.height, self.width)
+                bbox_deltas = [xx - yy for xx, yy in zip(bbox_cliped,  bbox_crop)]
+                h, w = masks[i].shape[:2]
+                crop_mask_coords = [int(bbox_deltas[0]), int(bbox_deltas[1]), int(w + bbox_deltas[2]), int(h + bbox_deltas[3])]
+                crop_mask_coords = np.maximum(0, crop_mask_coords)
+                res.append(masks[i][crop_mask_coords[1]:crop_mask_coords[3], crop_mask_coords[0]:crop_mask_coords[2]])
+        else:
+            print('bruh')
+        self.hash_bboxes = []
+        return res
 
     def get_transform_init_args_names(self):
         return ("height", "width")
